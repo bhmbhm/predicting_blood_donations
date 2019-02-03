@@ -5,6 +5,12 @@
 # Session Data files
 .RData
 
+# Remove .DS_Store
+.DS_Store
+
+# Remove .gitattributes
+.gitattributes
+
 # Example code in package build process
 *-Ex.R
 
