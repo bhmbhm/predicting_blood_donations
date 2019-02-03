@@ -1,0 +1,213 @@
+---
+title: "Predict Blood Donations"
+author: "Ben Herndon-Miller"
+date: "1/29/2019"
+output: html_document
+---
+
+# Load dependencies and data
+
+```{r}
+# Install and load pacakges
+list.of.packages <- c("dplyr", "caret", "e1071")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(dplyr)
+library(caret)
+library(e1071)
+
+# Load data
+train <- read.csv("data/BloodDonationTrainingData.csv", header = TRUE, stringsAsFactors = FALSE)
+test <- read.csv("data/BloodDonationTestData.csv", header = TRUE, stringsAsFactors = FALSE)
+example_submission <- read.csv("data/BloodDonationSubmissionFormat.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Rename labels for the caret package (doesn't allow 1 and 0 as label names)
+train$Made.Donation.in.March.2007[train$Made.Donation.in.March.2007 ==1] <- "yes"
+train$Made.Donation.in.March.2007[train$Made.Donation.in.March.2007 ==0] <- "no"
+```
+
+# Define custom log loss function
+
+```{r}
+# Code borrowed from https://www.kaggle.com/c/otto-group-product-classification-challenge/discussion/13064#69102
+LogLossSummary <- function (data, lev = NULL, model = NULL) {
+  LogLoss <- function(actual, pred, eps = 1e-15) {
+    # Check to see that two vectors are the same length
+    stopifnot(all(dim(actual) == dim(pred)))
+    # Bound probabilities (0,1) for computational purposes
+    pred[pred < eps] <- eps
+    pred[pred > 1 - eps] <- 1 - eps
+    # Compute log loss
+    -sum(actual * log(pred)) / nrow(pred)}
+    # Convert into factors
+    if (is.character(data$obs)) data$obs <- factor(data$obs, levels = lev)
+    pred <- data[, "pred"]
+    obs <- data[, "obs"]
+    isNA <- is.na(pred)
+    pred <- pred[!isNA]
+    obs <- obs[!isNA]
+    data <- data[!isNA, ]
+    cls <- levels(obs)
+    # Contruct loss function summary output
+    if (length(obs) + length(pred) == 0) {out <- rep(NA, 2)} 
+    else {
+      pred <- factor(pred, levels = levels(obs))
+      out <- unlist(e1071::classAgreement(table(obs, pred)))[c("diag", "kappa")]
+      probs <- data[, cls]
+      actual <- model.matrix(~ obs - 1)
+      out2 <- LogLoss(actual = actual, pred = probs)
+      }
+    out <- c(out, out2)
+    names(out) <- c("Accuracy", "Kappa", "LogLoss")
+    if (any(is.nan(out))) out[is.nan(out)] <- NA 
+  out
+  }
+```
+
+# K-Nearest Neighbors
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create training controls for repeated cross-validation for KNN
+knn_control <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       classProbs = TRUE,
+                       summaryFunction = LogLossSummary)
+
+# Create vector of hyper-parameter values to tune over
+knn_grid <- expand.grid(k = c(1:20))
+
+# Train KNN model
+knn_fit <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
+                 data = train,
+                 method = "knn",
+                 metric = "LogLoss",
+                 maximize = FALSE,
+                 trControl = knn_control,
+                 tuneGrid = knn_grid)
+
+# Predict on test data to output class probabilities
+knn_pred <- predict(knn_fit, test, type = "prob")
+
+# Create data frame to submit 
+knn_submission <- data.frame(test$X, knn_pred$yes)
+colnames(knn_submission) <- c("", "Made Donation in March 2007")
+
+# Write CSV to submit
+write.csv(knn_submission, "knn_submission_14.csv", row.names = FALSE)
+```
+
+# Penalized Logistic Regression (Elastic Net)
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create training controls for repeated cross-validation for Elastic Net
+elnet_control <- trainControl(method = "repeatedcv",
+                       number = 10,
+                       classProbs = TRUE,
+                       summaryFunction = LogLossSummary)
+
+# Create grid of hyper-parameter values to tune over
+elnet_grid <- expand.grid(alpha = seq(0,1,0.05),
+                          lambda = 10^seq(-1,-4,length=20))
+
+# Train Elastic Net model
+elnet_fit <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
+                 data = train,
+                 method = "glmnet",
+                 metric = "LogLoss",
+                 maximize = FALSE,
+                 trControl = elnet_control,
+                 tuneGrid = elnet_grid)
+
+# Predict on test data to output class probabilities
+elnet_pred <- predict(elnet_fit, test, type = "prob")
+
+# Create data frame to submit 
+elnet_submission <- data.frame(test$X, elnet_pred$yes)
+colnames(elnet_submission) <- c("", "Made Donation in March 2007")
+
+# Write CSV to submit
+write.csv(elnet_submission, "elnet_submission.csv", row.names = FALSE)
+```
+
+### Support Vector Machine with Linear Kernel
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create training controls for K-Fold cross-validation for SVM
+svm_control <- trainControl(method = "cv",
+                       number = 10,
+                       classProbs = TRUE,
+                       summaryFunction = LogLossSummary)
+
+# Create grid of hyper-parameter values to tune over
+svm_grid <- expand.grid(C = 2^seq(-5,5))
+
+# Train SVM model with Linear Kernel
+svm_fit <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
+                 data = train,
+                 method = "svmLinear",
+                 # We can add options to pre-process the data
+                 preProc = c("center", "scale"),
+                 metric = "LogLoss",
+                 maximize = FALSE,
+                 trControl = svm_control,
+                 tuneGrid = svm_grid)
+
+# Predict on test data to output class probabilities
+svm_pred <- predict(svm_fit, test, type = "prob")
+
+# Create data frame to submit 
+svm_submission <- data.frame(test$X, svm_pred$yes)
+colnames(svm_submission) <- c("", "Made Donation in March 2007")
+
+# Write CSV to submit
+write.csv(svm_submission, "svm_submission.csv", row.names = FALSE)
+```
+
+### Random Forest
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create training controls for K-Fold cross-validation for Random Forest
+rf_control <- trainControl(method = "cv",
+                       number = 10,
+                       classProbs = TRUE,
+                       summaryFunction = LogLossSummary)
+
+# Create vector of hyper-parameter values to tune over
+rf_grid <- expand.grid(mtry = c(1:4))
+
+# Train Random Forest model
+rf_fit <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
+                 data = train,
+                 method = "rf",
+                 # We can add options to pre-process the data
+                 preProc = c("center", "scale"),
+                 metric = "LogLoss",
+                 maximize = FALSE,
+                 trControl = rf_control,
+                 tuneGrid = rf_grid)
+
+# Predict on test data to output class probabilities
+rf_pred <- predict(rf_fit, test, type = "prob")
+
+# Create data frame to submit 
+rf_submission <- data.frame(test$X, rf_pred$yes)
+colnames(rf_submission) <- c("", "Made Donation in March 2007")
+
+# Write CSV to submit
+write.csv(rf_submission, "rf_submission.csv", row.names = FALSE)
+```
+
