@@ -9,7 +9,7 @@ output: html_document
 
 ```{r}
 # Install and load pacakges
-list.of.packages <- c("dplyr", "caret", "e1071")
+list.of.packages <- c("dplyr", "caret", "e1071", "esquisse")
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -17,6 +17,7 @@ if(length(new.packages)) install.packages(new.packages)
 library(dplyr)
 library(caret)
 library(e1071)
+library(esquisse)
 
 # Load data
 train <- read.csv("data/BloodDonationTrainingData.csv", header = TRUE, stringsAsFactors = FALSE)
@@ -26,6 +27,32 @@ example_submission <- read.csv("data/BloodDonationSubmissionFormat.csv", header 
 # Rename labels for the caret package (doesn't allow 1 and 0 as label names)
 train$Made.Donation.in.March.2007[train$Made.Donation.in.March.2007 ==1] <- "yes"
 train$Made.Donation.in.March.2007[train$Made.Donation.in.March.2007 ==0] <- "no"
+```
+
+# Exploratory Analysis
+
+```{r}
+esquisse::esquisser()
+```
+
+# Tests for Marginal Associations
+
+```{r}
+# Initialize data frame to store results of t-tests
+marginal_results <- data.frame(matrix(nrow = 4, ncol = 4))
+colnames(marginal_results) <- c("mean_no", "mean_yes", "t_statistic", "p_value")
+rownames(marginal_results) <- colnames(train)[2:5]
+
+# Perform Welch's t-test to test marginal association between all variables
+for (i in 2:5){
+  tmp_test <- t.test(train[,i]~train$Made.Donation.in.March.2007)
+  marginal_results$mean_no[i-1] <- tmp_test$estimate[1]
+  marginal_results$mean_yes[i-1] <- tmp_test$estimate[2]
+  marginal_results$t_statistic[i-1] <- tmp_test$statistic
+  marginal_results$p_value[i-1] <- tmp_test$p.value
+}
+
+marginal_results
 ```
 
 # Define custom log loss function
@@ -114,8 +141,8 @@ elnet_control <- trainControl(method = "repeatedcv",
                        summaryFunction = LogLossSummary)
 
 # Create grid of hyper-parameter values to tune over
-elnet_grid <- expand.grid(alpha = seq(0,1,0.05),
-                          lambda = 10^seq(-1,-4,length=20))
+elnet_grid <- expand.grid(alpha = seq(0,1,0.1),
+                          lambda = 10^seq(-4,-1,length=100))
 
 # Train Elastic Net model
 elnet_fit <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
