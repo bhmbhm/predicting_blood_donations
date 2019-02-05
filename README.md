@@ -1,6 +1,7 @@
-# Predictive Modeling for Machine Learning Competitions
-## Houston R Users Group
-## Ben Herndon-Miller
+---
+title: "Predict Blood Donations"
+author: "Ben Herndon-Miller"
+---
 
 This is a repository with example work for the Driven Data machine learning competition: "Warm Up: Predict Blood Donations". In this repository are the following:
 
