@@ -55,7 +55,65 @@ for (i in 2:5){
 marginal_results
 ```
 
-# Define custom log loss function
+# Define log loss function
+
+```{r}
+# Define function to calculate log loss
+log_loss <- function(actual, predicted, eps = 1e-15){
+    actual[actual == "yes"] <- 1
+    actual[actual == "no"] <- 0
+    actual <- as.numeric(actual)
+    # Bound probabilities (0,1) for computational purposes
+    predicted[predicted < eps] <- eps
+    predicted[predicted > 1 - eps] <- 1 - eps
+    result=-1/length(actual)*(sum((actual*log(predicted)+(1-actual)*log(1-predicted))))
+    return(result)
+}
+```
+
+# Train KNN algorithm
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Initialize data frame of cross-validation log loss
+knn_cv_results <- data.frame(matrix(ncol = 6, nrow = 20))
+knn_cv_results[,1] <- c(1:20)
+colnames(knn_cv_results) <- c("k", "iter1", "iter2", "iter3", "iter4", "iter5")
+
+# Perform repeated cross-validation for KNN to tune K
+for (i in 1:20){
+  for (j in 1:5){
+    # Set random index for subsampling
+    cv_idx <- sample(nrow(train), nrow(train)*.7, replace = FALSE)
+    
+    # Split data into training and validation sets, drop ID column
+    cv_tr <- train[cv_idx,-1]
+    cv_val <- train[-cv_idx,-1]
+    
+    # Set K
+    cv_grid <- expand.grid(k = c(i))
+    
+    # Train KNN model
+    knn_cv <- train(as.factor(Made.Donation.in.March.2007) ~ Months.since.Last.Donation + Number.of.Donations + Total.Volume.Donated..c.c.. + Months.since.First.Donation,
+                 data = cv_tr,
+                 method = "knn",
+                 tuneGrid = cv_grid)
+    
+    # Predict on validation set
+    pred_cv <- predict(knn_cv, cv_val, type = "prob")
+    
+    # Record results 
+    knn_cv_results[i,j+1] <- log_loss(cv_val$Made.Donation.in.March.2007, pred_cv$yes)
+  }
+}
+
+# Calculate average log loss at each value of K
+knn_cv_results$avg_log_loss <- rowSums(knn_cv_results[,2:6])/5
+```
+
+# Define custom log loss function for Caret Package
 
 ```{r}
 # Code borrowed from https://www.kaggle.com/c/otto-group-product-classification-challenge/discussion/13064#69102
@@ -101,7 +159,7 @@ set.seed(123)
 
 # Create training controls for repeated cross-validation for KNN
 knn_control <- trainControl(method = "repeatedcv",
-                       number = 10,
+                       number = 5,
                        classProbs = TRUE,
                        summaryFunction = LogLossSummary)
 
@@ -125,7 +183,7 @@ knn_submission <- data.frame(test$X, knn_pred$yes)
 colnames(knn_submission) <- c("", "Made Donation in March 2007")
 
 # Write CSV to submit
-write.csv(knn_submission, "knn_submission_14.csv", row.names = FALSE)
+write.csv(knn_submission, "knn_submission.csv", row.names = FALSE)
 ```
 
 # Penalized Logistic Regression (Elastic Net)
